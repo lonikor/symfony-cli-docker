@@ -8,13 +8,12 @@ TAG          ?= $(SYMFONY_CLI_VERSION)
 IMAGE_REF    := $(IMAGE):$(TAG)
 PLATFORMS    ?= linux/amd64,linux/arm64
 
-# Provenance args (best-effort; CI overrides these).
-VERSION      ?= dev
-VCS_REF      := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-BUILD_DATE   := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-BUILD_ARGS   := --build-arg VERSION=$(VERSION) \
-                --build-arg VCS_REF=$(VCS_REF) \
-                --build-arg BUILD_DATE=$(BUILD_DATE)
+# Keep the local scan in lockstep with CI (.github/workflows/build.yml).
+# NOTE: this is the Trivy *binary* version, which differs from the
+# aquasecurity/trivy-action version used in CI (action v0.36.0 ships Trivy
+# 0.70.0). Bump this in step with the action so local and CI scans agree.
+TRIVY_VERSION ?= 0.70.0
+TRIVY_IGNORE  := .trivyignore.yaml
 
 .DEFAULT_GOAL := help
 
@@ -25,21 +24,24 @@ help: ## Show this help
 
 .PHONY: build
 build: ## Build the image for the local platform
-	docker build $(BUILD_ARGS) -t $(IMAGE_REF) .
+	docker build -t $(IMAGE_REF) .
 
 .PHONY: buildx
 buildx: ## Build multi-arch (does not load into local docker)
-	docker buildx build $(BUILD_ARGS) --platform $(PLATFORMS) -t $(IMAGE_REF) .
+	docker buildx build --platform $(PLATFORMS) -t $(IMAGE_REF) .
 
 .PHONY: lint
-lint: ## Lint the Dockerfile with hadolint
-	docker run --rm -i hadolint/hadolint < Dockerfile
+lint: ## Lint the Dockerfile with hadolint (uses .hadolint.yaml, matches CI)
+	docker run --rm -i -v "$(PWD)/.hadolint.yaml":/.hadolint.yaml \
+		hadolint/hadolint hadolint --config /.hadolint.yaml - < Dockerfile
 
 .PHONY: scan
-scan: build ## Scan the built image for HIGH/CRITICAL vulnerabilities
+scan: build ## Scan the built image for HIGH/CRITICAL vulnerabilities (matches CI)
 	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-		aquasec/trivy:latest image --ignore-unfixed \
-		--severity HIGH,CRITICAL $(IMAGE_REF)
+		-v "$(PWD)/$(TRIVY_IGNORE)":/$(TRIVY_IGNORE) \
+		aquasec/trivy:$(TRIVY_VERSION) image --ignore-unfixed \
+		--ignorefile /$(TRIVY_IGNORE) \
+		--severity HIGH,CRITICAL --exit-code 1 $(IMAGE_REF)
 
 .PHONY: shell
 shell: build ## Open an interactive shell in the image (cwd mounted at /app)

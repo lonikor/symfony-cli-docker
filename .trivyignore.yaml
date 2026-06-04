@@ -1,0 +1,89 @@
+# Trivy ignore policy (structured form).
+#
+# Every entry below is a CVE inside the upstream `symfony` Go binary
+# (/usr/local/bin/symfony): the Go standard library and the vendored
+# github.com/docker/docker SDK the Symfony CLI was compiled with. They cannot
+# be fixed from this Dockerfile — there is no patched package to install. They
+# clear when the Symfony CLI project ships a release rebuilt against a newer Go
+# toolchain, which Renovate picks up via the SYMFONY_CLI_VERSION bump.
+#
+# Each entry is:
+#   * path-scoped  -> only ignored for the symfony binary, never globally;
+#                     a new CVE anywhere else still fails the build.
+#   * justified    -> `statement` records why it is accepted.
+#   * time-boxed   -> `expired_at` makes the suppression lapse, so CI re-fails
+#                     and forces a fresh review instead of hiding forever.
+#
+# REVIEW on expiry (or after any SYMFONY_CLI_VERSION bump): re-run the scan and
+# drop every ID that no longer appears.
+#
+# Pinned at authoring time: symfony-cli 5.17.1
+#   (Go stdlib v1.26.0, github.com/docker/docker v28.5.2)
+
+vulnerabilities:
+  # --- github.com/docker/docker: authorization bypass --------------------
+  - id: CVE-2026-34040
+    paths:
+      - usr/local/bin/symfony
+    statement: >-
+      Vendored github.com/docker/docker in the upstream symfony CLI binary.
+      Not network-exposed in a dev CLI; fixed only by an upstream rebuild.
+    expired_at: 2026-09-04
+
+  # --- Go standard library (net/url, crypto/x509, crypto/tls, net, ...) ---
+  - id: CVE-2026-25679
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04
+  - id: CVE-2026-27137
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04
+  - id: CVE-2026-32280
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04
+  - id: CVE-2026-32281
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04
+  - id: CVE-2026-32283
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04
+  - id: CVE-2026-33810
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04
+  - id: CVE-2026-33811
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04
+  - id: CVE-2026-33814
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04
+  - id: CVE-2026-39820
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04
+  - id: CVE-2026-39823
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04
+  - id: CVE-2026-39825
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04
+  - id: CVE-2026-39826
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04
+  - id: CVE-2026-39836
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04
+  - id: CVE-2026-42499
+    paths: [usr/local/bin/symfony]
+    statement: Go stdlib in the upstream symfony binary; fixed by upstream Go rebuild.
+    expired_at: 2026-09-04

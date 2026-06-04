@@ -30,21 +30,14 @@ FROM php:${PHP_VERSION}-cli-alpine
 # Re-declared inside the build stage so it is usable in the RUN below.
 ARG SYMFONY_CLI_VERSION=5.17.1
 
-# Build-time provenance, injected by CI (see .github/workflows/build.yml).
-ARG VERSION=dev
-ARG VCS_REF=unknown
-ARG BUILD_DATE=unknown
-
 # Fail pipelines on the first failing command (busybox ash needs this set
 # explicitly) so checksum verification below can't be silently bypassed.
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
-LABEL org.opencontainers.image.title="symfony-cli" \
-      org.opencontainers.image.description="Symfony CLI on php:8.5-cli-alpine with all common Symfony PHP extensions and Composer" \
-      org.opencontainers.image.source="https://symfony.com/doc/current/setup/symfony_cli.html" \
-      org.opencontainers.image.version="${VERSION}" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.created="${BUILD_DATE}"
+# OCI image labels (title/description/source/version/revision/created) are
+# applied at build time by docker/metadata-action in CI — see
+# .github/workflows/build.yml — so they stay a single source of truth and
+# don't need build-arg plumbing here.
 
 # ---------------------------------------------------------------------------
 # System packages used at runtime by the Symfony CLI, Composer and Git tooling.
@@ -56,8 +49,7 @@ RUN apk add --no-cache \
         openssh-client \
         unzip \
         tar \
-        ca-certificates \
-        gnupg
+        ca-certificates
 
 # ---------------------------------------------------------------------------
 # PHP extensions.
@@ -108,16 +100,14 @@ COPY --from=composer /usr/bin/composer /usr/local/bin/composer
 # Symfony CLI binary.
 #
 # Installed from the official GitHub release for the pinned version. The tarball
-# is verified against the release's signed `checksums.txt` before extraction so
-# a tampered or corrupted download fails the build.
+# is verified against the release's `checksums.txt` (SHA-256) before extraction
+# so a tampered or corrupted download fails the build.
 # ---------------------------------------------------------------------------
 RUN set -eux; \
     apkArch="$(apk --print-arch)"; \
     case "$apkArch" in \
         x86_64)  arch='amd64' ;; \
         aarch64) arch='arm64' ;; \
-        armv7|armhf) arch='armv6' ;; \
-        x86)     arch='386' ;; \
         *) echo >&2 "Unsupported architecture: $apkArch"; exit 1 ;; \
     esac; \
     base="https://github.com/symfony-cli/symfony-cli/releases/download/v${SYMFONY_CLI_VERSION}"; \
@@ -164,11 +154,11 @@ WORKDIR /app
 USER symfony
 
 # Expose the default port used by `symfony server:start`.
+#
+# No HEALTHCHECK is baked in: the default use of this image is the CLI (see CMD
+# below), which exits immediately, so an image-level health check would be
+# inert or misleading. When running the web server, define the health check in
+# your runtime layer (docker compose / k8s) where you know it's a server.
 EXPOSE 8000
-
-# Health check for the local web server (only meaningful when running as a
-# server; CLI invocations exit before it is ever evaluated).
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -fsS http://localhost:8000/ >/dev/null || exit 1
 
 CMD ["symfony", "list"]

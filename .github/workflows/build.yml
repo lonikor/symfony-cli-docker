@@ -7,6 +7,16 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege by default for every job; jobs opt into more where needed.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref, but let tag (release) builds always
+# finish so a published version is never half-built.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
 # Docker Hub image name. The repo (e.g. "symfony-cli") lives under your
 # Docker Hub account; the account comes from the DOCKERHUB_USERNAME secret.
 env:
@@ -19,41 +29,127 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - name: Lint Dockerfile (hadolint)
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           dockerfile: Dockerfile
 
   # ---------------------------------------------------------------------------
-  # Build (multi-arch), scan, and push.
+  # Build each target platform, smoke-test it, and scan it with Trivy. This
+  # gates the push: every architecture we publish is built, run, and scanned.
   # ---------------------------------------------------------------------------
-  build:
+  scan:
     needs: lint
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      security-events: write   # upload-sarif
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+          - platform: linux/arm64
+            arch: arm64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      # Build the single-arch image into the local docker daemon so it can be
+      # run (smoke test) and scanned before anything is pushed.
+      - name: Build image (${{ matrix.platform }})
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: scan-target:latest
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+
+      - name: Smoke test
+        run: |
+          docker run --rm scan-target:latest symfony check:requirements
+          docker run --rm scan-target:latest composer --version
+          for ext in intl pdo_pgsql pdo_mysql redis sodium gd; do
+            docker run --rm scan-target:latest php -m | grep -qx "$ext" \
+              || { echo "missing PHP extension: $ext"; exit 1; }
+          done
+
+      # Non-blocking SARIF run so findings show up in the Security tab over time.
+      - name: Trivy scan (SARIF)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: scan-target:latest
+          format: sarif
+          output: trivy-results.sarif
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          trivyignores: .trivyignore.yaml
+
+      - name: Upload SARIF
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@b22c66273205240d86582638b860f9b25772b4d3 # v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-${{ matrix.arch }}
+
+      # Blocking gate: fail the build on any HIGH/CRITICAL that isn't suppressed.
+      - name: Trivy scan (gate)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: scan-target:latest
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          # Path-scoped, justified, time-boxed suppressions for unfixable CVEs
+          # baked into the upstream symfony Go binary (see .trivyignore.yaml).
+          trivyignores: .trivyignore.yaml
+
+  # ---------------------------------------------------------------------------
+  # Build the multi-arch image and push it. Runs only after every arch passed
+  # the scan gate, and never on pull requests.
+  # ---------------------------------------------------------------------------
+  push:
+    needs: scan
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+          # Single source of truth for OCI labels. version/revision/created/url
+          # are generated automatically; title/description are curated here.
+          labels: |
+            org.opencontainers.image.title=symfony-cli
+            org.opencontainers.image.description=Symfony CLI on Alpine with the PHP extensions commonly required by Symfony, plus Composer
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -63,33 +159,8 @@ jobs:
             # Untagged pushes to the default branch (main) publish `latest`.
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # Build a single-arch image to the local docker daemon first so it can be
-      # scanned by Trivy before anything is pushed.
-      - name: Build image for scanning
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          load: true
-          tags: scan-target:latest
-          build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
-            VCS_REF=${{ github.sha }}
-            BUILD_DATE=${{ github.event.repository.updated_at }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Scan image (Trivy)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: scan-target:latest
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          severity: HIGH,CRITICAL
-
       - name: Build and push (multi-arch)
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -98,9 +169,7 @@ jobs:
           sbom: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
-            VCS_REF=${{ github.sha }}
-            BUILD_DATE=${{ github.event.repository.updated_at }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=gha,scope=amd64
+            type=gha,scope=arm64
+          cache-to: type=gha,scope=push,mode=max
