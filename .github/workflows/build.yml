@@ -36,8 +36,8 @@ jobs:
           dockerfile: Dockerfile
 
   # ---------------------------------------------------------------------------
-  # Build each target platform, smoke-test it, and scan it with Trivy. This
-  # gates the push: every architecture we publish is built, run, and scanned.
+  # Build the image, smoke-test it, and scan it with Trivy. This gates the push.
+  # The runner is amd64, so the build is native (no QEMU emulation needed).
   # ---------------------------------------------------------------------------
   scan:
     needs: lint
@@ -45,34 +45,22 @@ jobs:
     permissions:
       contents: read
       security-events: write   # upload-sarif
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            arch: amd64
-          - platform: linux/arm64
-            arch: arm64
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      # Build the single-arch image into the local docker daemon so it can be
-      # run (smoke test) and scanned before anything is pushed.
-      - name: Build image (${{ matrix.platform }})
+      # Build into the local docker daemon so it can be run (smoke test) and
+      # scanned before anything is pushed.
+      - name: Build image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
-          platforms: ${{ matrix.platform }}
           load: true
           tags: scan-target:latest
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Smoke test
         run: |
@@ -100,7 +88,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@b22c66273205240d86582638b860f9b25772b4d3 # v3
         with:
           sarif_file: trivy-results.sarif
-          category: trivy-${{ matrix.arch }}
+          category: trivy
 
       # Blocking gate: fail the build on any HIGH/CRITICAL that isn't suppressed.
       - name: Trivy scan (gate)
@@ -116,8 +104,8 @@ jobs:
           trivyignores: .trivyignore.yaml
 
   # ---------------------------------------------------------------------------
-  # Build the multi-arch image and push it. Runs only after every arch passed
-  # the scan gate, and never on pull requests.
+  # Build and push the image. Runs only after the scan gate passed, and never
+  # on pull requests.
   # ---------------------------------------------------------------------------
   push:
     needs: scan
@@ -127,9 +115,6 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -159,17 +144,15 @@ jobs:
             # Untagged pushes to the default branch (main) publish `latest`.
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push (multi-arch)
+      - name: Build and push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           provenance: true
           sbom: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: |
-            type=gha,scope=amd64
-            type=gha,scope=arm64
-          cache-to: type=gha,scope=push,mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

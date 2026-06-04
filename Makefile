@@ -6,7 +6,7 @@ IMAGE        ?= symfony-cli
 SYMFONY_CLI_VERSION ?= $(shell sed -n 's/^ARG SYMFONY_CLI_VERSION=//p' Dockerfile)
 TAG          ?= $(SYMFONY_CLI_VERSION)
 IMAGE_REF    := $(IMAGE):$(TAG)
-PLATFORMS    ?= linux/amd64,linux/arm64
+PLATFORMS    ?= linux/amd64
 
 # Keep the local scan in lockstep with CI (.github/workflows/build.yml).
 # NOTE: this is the Trivy *binary* version, which differs from the
@@ -52,6 +52,6 @@ check: build ## Run `symfony check:requirements` inside the image
 	docker run --rm $(IMAGE_REF) symfony check:requirements
 
 .PHONY: push
-push: ## Build and push multi-arch to a registry (set IMAGE=registry/name)
-	docker buildx build $(BUILD_ARGS) --platform $(PLATFORMS) \
+push: ## Build and push to a registry (set IMAGE=registry/name)
+	docker buildx build --platform $(PLATFORMS) \
 		-t $(IMAGE_REF) --push .
