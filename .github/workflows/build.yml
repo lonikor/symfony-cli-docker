@@ -241,18 +241,19 @@ jobs:
       # Sync the repository overview (the long README rendered on the Docker Hub
       # repo page) from DOCKERHUB.md. This is a separate Docker Hub *API* property,
       # not part of the image, so build-push-action does not touch it. Only on
-      # `main` — tag-only builds and the API token's write scope make this the safe
-      # place. Requires DOCKERHUB_TOKEN to have read/write (repo) scope.
+      # `main` — tag-only builds don't change the overview.
       - name: Update Docker Hub repository description
         if: github.ref == 'refs/heads/main'
         # Cosmetic, post-push side-effect: never fail an already-published image
-        # over a description sync hiccup (e.g. token scope). Needs a full-access
-        # (Read/Write/Delete) Docker Hub PAT — restricted PATs get 403 Forbidden.
+        # over a description sync hiccup.
         continue-on-error: true
         uses: peter-evans/dockerhub-description@432a30c9e07499fd01da9f8a49f0faf9e0ca5b77 # v4.0.2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          # The description/overview API rejects personal access tokens with 403,
+          # so this step must authenticate with the account password (not the PAT
+          # used for image pushes). Stored as the DOCKERHUB_PASSWORD secret.
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
           repository: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
           readme-filepath: ./DOCKERHUB.md
           short-description: "Symfony CLI on Alpine with common PHP extensions, plus Composer"
