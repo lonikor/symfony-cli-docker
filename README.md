@@ -7,8 +7,11 @@ PHP extensions commonly required by Symfony applications.
 ## Pull the published image
 
 CI builds, scans (hadolint + Trivy) and publishes the image to Docker Hub at
-[`lonikor/symfony-cli`](https://hub.docker.com/r/lonikor/symfony-cli) on every
-push to `main` and every `v*` tag — you don't have to build it yourself:
+[`lonikor/symfony-cli`](https://hub.docker.com/r/lonikor/symfony-cli) — you
+don't have to build it yourself. A push to `main` only rebuilds and republishes
+when the Symfony CLI version (the `SYMFONY_CLI_VERSION` build arg) is new, i.e.
+its tag isn't already on Docker Hub; pushes for an unchanged version are skipped.
+`v*` git tags always build.
 
 ```bash
 docker pull lonikor/symfony-cli:latest
@@ -20,7 +23,7 @@ docker pull lonikor/symfony-cli:5.17.1
 
 | Tag                     | Points at                                             |
 |-------------------------|-------------------------------------------------------|
-| `latest`                | Latest build of the `main` branch                     |
+| `latest`                | The newest published Symfony CLI version               |
 | `5.17.1`                | The exact Symfony CLI version baked into the image    |
 | `1.2.3` / `1.2`         | Semver, published when you push a `v1.2.3` git tag    |
 | `sha-<commit>`          | Immutable, tied to a specific commit                  |

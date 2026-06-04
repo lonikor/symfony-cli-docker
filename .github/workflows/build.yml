@@ -24,9 +24,65 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Decide whether there is anything to build.
+  #
+  # The image is versioned after the Symfony CLI binary it ships (the
+  # ARG SYMFONY_CLI_VERSION default in the Dockerfile). On a normal push to the
+  # default branch we only want to build/scan/push when that version is *new* —
+  # i.e. the matching tag does not already exist on Docker Hub. This keeps
+  # `latest` pinned to the newest CLI version: it only moves when a genuinely
+  # new version is published.
+  #
+  # Pull requests and git tag (release) pushes always build, so PRs are still
+  # validated and explicit releases are never silently skipped.
+  # ---------------------------------------------------------------------------
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      should_build: ${{ steps.decide.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Decide whether to build
+        id: decide
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+
+          # Single source of truth: the SYMFONY_CLI_VERSION default in the Dockerfile.
+          version="$(sed -n 's/^ARG SYMFONY_CLI_VERSION=//p' Dockerfile)"
+          if [ -z "$version" ]; then
+            echo >&2 "Could not read SYMFONY_CLI_VERSION from Dockerfile"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # Only branch pushes are version-gated. PRs (validation) and git tag
+          # releases always build.
+          if [ "${{ github.event_name }}" != "push" ] || [ "${{ github.ref_type }}" != "branch" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Not a branch push — building."
+            exit 0
+          fi
+
+          # Ask Docker Hub whether this tag already exists. 200 = exists, 404 = new.
+          tag_url="https://hub.docker.com/v2/repositories/${DOCKERHUB_USERNAME}/${IMAGE_NAME}/tags/${version}"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$tag_url" || echo 000)"
+          if [ "$code" = "200" ]; then
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag ${version} already exists on Docker Hub — skipping build."
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag ${version} not found (HTTP ${code}) — building."
+          fi
+
+  # ---------------------------------------------------------------------------
   # Lint the Dockerfile.
   # ---------------------------------------------------------------------------
   lint:
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -40,7 +96,8 @@ jobs:
   # The runner is amd64, so the build is native (no QEMU emulation needed).
   # ---------------------------------------------------------------------------
   scan:
-    needs: lint
+    needs: [check, lint]
+    if: needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -108,8 +165,8 @@ jobs:
   # on pull requests.
   # ---------------------------------------------------------------------------
   push:
-    needs: scan
-    if: github.event_name != 'pull_request'
+    needs: [check, scan]
+    if: github.event_name != 'pull_request' && needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -124,18 +181,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # Read the Symfony CLI version pinned in the Dockerfile so the pushed
-      # image carries a tag matching the actual Symfony CLI binary inside it
-      # (single source of truth: the ARG SYMFONY_CLI_VERSION default).
-      - name: Read Symfony CLI version
-        id: symfony
-        run: |
-          version="$(sed -n 's/^ARG SYMFONY_CLI_VERSION=//p' Dockerfile)"
-          if [ -z "$version" ]; then
-            echo >&2 "Could not read SYMFONY_CLI_VERSION from Dockerfile"; exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Docker metadata
         id: meta
@@ -155,8 +200,11 @@ jobs:
             type=sha
             # Tag with the Symfony CLI version baked into the image, so the
             # image tag always matches the Symfony CLI binary it ships.
-            type=raw,value=${{ steps.symfony.outputs.version }}
-            # Untagged pushes to the default branch (main) publish `latest`.
+            type=raw,value=${{ needs.check.outputs.version }}
+            # Pushes to the default branch (main) publish `latest`. Because the
+            # build is version-gated (see the `check` job), `latest` only moves
+            # when a new Symfony CLI version is published — so it always tracks
+            # the newest version.
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
