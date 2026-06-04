@@ -6,6 +6,12 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main]
+  # Weekly rebuild so base-image CVE patches (Alpine/PHP) land in `latest` even
+  # when nothing in the repo changes. The scan gate runs against the fresh image.
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  # Manual trigger to force a rebuild/refresh of `latest` on demand.
+  workflow_dispatch:
 
 # Least privilege by default for every job; jobs opt into more where needed.
 permissions:
@@ -24,27 +30,32 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Decide whether there is anything to build.
+  # Resolve the image version and decide whether the *immutable version tag*
+  # should be (re)published.
   #
-  # The image is versioned after the Symfony CLI binary it ships (the
-  # ARG SYMFONY_CLI_VERSION default in the Dockerfile). On a normal push to the
-  # default branch we only want to build/scan/push when that version is *new* —
-  # i.e. the matching tag does not already exist on Docker Hub. This keeps
-  # `latest` pinned to the newest CLI version: it only moves when a genuinely
-  # new version is published.
+  # We always build, smoke-test, scan, and (outside PRs) publish the moving tags
+  # (`latest`, `sha-<commit>`, `main`). This keeps `latest` validated and fresh —
+  # picking up Dockerfile edits and weekly base-image CVE patches — regardless of
+  # whether the Symfony CLI version changed.
   #
-  # Pull requests and git tag (release) pushes always build, so PRs are still
-  # validated and explicit releases are never silently skipped.
+  # The only thing that is version-gated is the immutable `<version>` tag (e.g.
+  # `1.2.3`), which mirrors the Symfony CLI binary baked into the image. We refuse
+  # to overwrite it once it exists on Docker Hub, so a published version digest
+  # stays stable. It is (re)written only when:
+  #   * a git tag (release) is pushed, or
+  #   * a branch push introduces a version that does not yet exist on Docker Hub.
+  # On scheduled/manual refreshes we deliberately do NOT rewrite it — only the
+  # moving tags get the patched rebuild.
   # ---------------------------------------------------------------------------
   check:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.decide.outputs.version }}
-      should_build: ${{ steps.decide.outputs.should_build }}
+      version_is_new: ${{ steps.decide.outputs.version_is_new }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      - name: Decide whether to build
+      - name: Resolve version and version-tag policy
         id: decide
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -58,31 +69,37 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-          # Only branch pushes are version-gated. PRs (validation) and git tag
-          # releases always build.
-          if [ "${{ github.event_name }}" != "push" ] || [ "${{ github.ref_type }}" != "branch" ]; then
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Not a branch push — building."
+          # Git tag (release) pushes always (re)publish the version tag.
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version_is_new=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Release tag push — will publish the ${version} image tag."
             exit 0
           fi
 
-          # Ask Docker Hub whether this tag already exists. 200 = exists, 404 = new.
-          tag_url="https://hub.docker.com/v2/repositories/${DOCKERHUB_USERNAME}/${IMAGE_NAME}/tags/${version}"
-          code="$(curl -sS -o /dev/null -w '%{http_code}' "$tag_url" || echo 000)"
-          if [ "$code" = "200" ]; then
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Tag ${version} already exists on Docker Hub — skipping build."
-          else
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Tag ${version} not found (HTTP ${code}) — building."
+          # Branch pushes publish the version tag only if it does not already
+          # exist on Docker Hub (immutable). 200 = exists, 404 = new.
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "branch" ]; then
+            tag_url="https://hub.docker.com/v2/repositories/${DOCKERHUB_USERNAME}/${IMAGE_NAME}/tags/${version}"
+            code="$(curl -sS -o /dev/null -w '%{http_code}' "$tag_url" || echo 000)"
+            if [ "$code" = "200" ]; then
+              echo "version_is_new=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::Tag ${version} already exists — refreshing moving tags only, keeping the immutable ${version} tag."
+            else
+              echo "version_is_new=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::Tag ${version} not found (HTTP ${code}) — will publish it."
+            fi
+            exit 0
           fi
+
+          # PRs (no push), scheduled rebuilds, and manual runs never (re)write the
+          # immutable version tag.
+          echo "version_is_new=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::${{ github.event_name }} run — moving tags only, immutable version tag untouched."
 
   # ---------------------------------------------------------------------------
   # Lint the Dockerfile.
   # ---------------------------------------------------------------------------
   lint:
-    needs: check
-    if: needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -96,8 +113,7 @@ jobs:
   # The runner is amd64, so the build is native (no QEMU emulation needed).
   # ---------------------------------------------------------------------------
   scan:
-    needs: [check, lint]
-    if: needs.check.outputs.should_build == 'true'
+    needs: lint
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -162,11 +178,12 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Build and push the image. Runs only after the scan gate passed, and never
-  # on pull requests.
+  # on pull requests. Always refreshes the moving tags (`latest`, `sha`, `main`);
+  # the immutable `<version>` tag is added only when `check` says it is new.
   # ---------------------------------------------------------------------------
   push:
     needs: [check, scan]
-    if: github.event_name != 'pull_request' && needs.check.outputs.should_build == 'true'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -198,13 +215,14 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
-            # Tag with the Symfony CLI version baked into the image, so the
-            # image tag always matches the Symfony CLI binary it ships.
-            type=raw,value=${{ needs.check.outputs.version }}
-            # Pushes to the default branch (main) publish `latest`. Because the
-            # build is version-gated (see the `check` job), `latest` only moves
-            # when a new Symfony CLI version is published — so it always tracks
-            # the newest version.
+            # Immutable tag matching the Symfony CLI version baked into the image.
+            # Only written when `check` decides it is new (or on a release tag), so
+            # an already-published version digest is never overwritten by a routine
+            # push or a scheduled refresh.
+            type=raw,value=${{ needs.check.outputs.version }},enable=${{ needs.check.outputs.version_is_new == 'true' }}
+            # Pushes to the default branch (main) and scheduled/manual rebuilds
+            # publish `latest`. Since the build is no longer version-gated, `latest`
+            # always reflects main and absorbs weekly base-image CVE patches.
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
