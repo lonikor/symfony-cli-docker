@@ -4,6 +4,30 @@ A Docker image for working with [Symfony](https://symfony.com) projects, based o
 `php:8.5-cli-alpine`. It bundles the **Symfony CLI**, **Composer**, and all the
 PHP extensions commonly required by Symfony applications.
 
+## Pull the published image
+
+CI builds, scans (hadolint + Trivy) and publishes the image to Docker Hub at
+[`lonikor/symfony-cli`](https://hub.docker.com/r/lonikor/symfony-cli) on every
+push to `main` and every `v*` tag — you don't have to build it yourself:
+
+```bash
+docker pull lonikor/symfony-cli:latest
+# or a specific Symfony CLI version:
+docker pull lonikor/symfony-cli:5.17.1
+```
+
+### Available tags
+
+| Tag                     | Points at                                             |
+|-------------------------|-------------------------------------------------------|
+| `latest`                | Latest build of the `main` branch                     |
+| `5.17.1`                | The exact Symfony CLI version baked into the image    |
+| `1.2.3` / `1.2`         | Semver, published when you push a `v1.2.3` git tag    |
+| `sha-<commit>`          | Immutable, tied to a specific commit                  |
+
+The version tag always matches the Symfony CLI binary inside the image, since
+both come from the `SYMFONY_CLI_VERSION` build arg (kept current by Renovate).
+
 ## What's inside
 
 | Component    | Version / notes                                  |
