@@ -125,6 +125,18 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Read the Symfony CLI version pinned in the Dockerfile so the pushed
+      # image carries a tag matching the actual Symfony CLI binary inside it
+      # (single source of truth: the ARG SYMFONY_CLI_VERSION default).
+      - name: Read Symfony CLI version
+        id: symfony
+        run: |
+          version="$(sed -n 's/^ARG SYMFONY_CLI_VERSION=//p' Dockerfile)"
+          if [ -z "$version" ]; then
+            echo >&2 "Could not read SYMFONY_CLI_VERSION from Dockerfile"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
@@ -141,6 +153,9 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
+            # Tag with the Symfony CLI version baked into the image, so the
+            # image tag always matches the Symfony CLI binary it ships.
+            type=raw,value=${{ steps.symfony.outputs.version }}
             # Untagged pushes to the default branch (main) publish `latest`.
             type=raw,value=latest,enable={{is_default_branch}}
 
