@@ -245,6 +245,10 @@ jobs:
       # place. Requires DOCKERHUB_TOKEN to have read/write (repo) scope.
       - name: Update Docker Hub repository description
         if: github.ref == 'refs/heads/main'
+        # Cosmetic, post-push side-effect: never fail an already-published image
+        # over a description sync hiccup (e.g. token scope). Needs a full-access
+        # (Read/Write/Delete) Docker Hub PAT — restricted PATs get 403 Forbidden.
+        continue-on-error: true
         uses: peter-evans/dockerhub-description@432a30c9e07499fd01da9f8a49f0faf9e0ca5b77 # v4.0.2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
