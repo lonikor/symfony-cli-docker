@@ -237,3 +237,18 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Sync the repository overview (the long README rendered on the Docker Hub
+      # repo page) from DOCKERHUB.md. This is a separate Docker Hub *API* property,
+      # not part of the image, so build-push-action does not touch it. Only on
+      # `main` — tag-only builds and the API token's write scope make this the safe
+      # place. Requires DOCKERHUB_TOKEN to have read/write (repo) scope.
+      - name: Update Docker Hub repository description
+        if: github.ref == 'refs/heads/main'
+        uses: peter-evans/dockerhub-description@432a30c9e07499fd01da9f8a49f0faf9e0ca5b77 # v4.0.2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+          readme-filepath: ./DOCKERHUB.md
+          short-description: "Symfony CLI on Alpine with common PHP extensions, plus Composer"
