@@ -12,14 +12,22 @@
 # Override at build time, e.g.:
 #   docker build --build-arg SYMFONY_CLI_VERSION=5.17.1 -t symfony-cli:5.17.1 .
 ###############################################################################
+# Pinned tool versions. Declared in the global scope (before any FROM) so they
+# can be used in the `FROM ... AS` stage references below — BuildKit does not
+# allow variable expansion directly in `COPY --from=<image>:${VAR}`.
 ARG PHP_VERSION=8.5
+ARG COMPOSER_VERSION=2.10.0
+ARG PHP_EXT_INSTALLER_VERSION=2.11.1
+
+# Pinned source stages for the binaries we copy in. Naming them here lets the
+# final stage do `COPY --from=composer` / `--from=php-ext-installer` without
+# variable expansion in the `--from` reference.
+FROM composer:${COMPOSER_VERSION} AS composer
+FROM mlocati/php-extension-installer:${PHP_EXT_INSTALLER_VERSION} AS php-ext-installer
 
 FROM php:${PHP_VERSION}-cli-alpine
 
-# Pinned tool versions (re-declared inside the build stage so they are usable
-# in COPY/RUN instructions below).
-ARG COMPOSER_VERSION=2.10.0
-ARG PHP_EXT_INSTALLER_VERSION=2.11.1
+# Re-declared inside the build stage so it is usable in the RUN below.
 ARG SYMFONY_CLI_VERSION=5.17.1
 
 # Build-time provenance, injected by CI (see .github/workflows/build.yml).
@@ -60,7 +68,7 @@ RUN apk add --no-cache \
 # requires plus the ones the vast majority of Symfony projects pull in
 # (databases, caching, messaging, image handling, etc.).
 # ---------------------------------------------------------------------------
-COPY --from=mlocati/php-extension-installer:${PHP_EXT_INSTALLER_VERSION} \
+COPY --from=php-ext-installer \
         /usr/bin/install-php-extensions /usr/local/bin/
 
 RUN install-php-extensions \
@@ -94,7 +102,7 @@ RUN install-php-extensions \
 # ---------------------------------------------------------------------------
 # Composer (copied from the official, pinned image).
 # ---------------------------------------------------------------------------
-COPY --from=composer:${COMPOSER_VERSION} /usr/bin/composer /usr/local/bin/composer
+COPY --from=composer /usr/bin/composer /usr/local/bin/composer
 
 # ---------------------------------------------------------------------------
 # Symfony CLI binary.
