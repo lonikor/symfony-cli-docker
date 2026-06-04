@@ -1,0 +1,9 @@
+# hadolint configuration
+# https://github.com/hadolint/hadolint
+
+# Versions are intentionally pinned via build ARGs, not hard-coded apk pins,
+# so the "pin versions in apk add" rule is not useful here.
+ignored:
+  - DL3018  # Pin versions in apk add — handled via ARGs / Renovate instead.
+
+failure-threshold: warning

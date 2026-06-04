@@ -1,0 +1,12 @@
+# Local environment / editor noise
+.env
+.env.local
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Trivy / scan output
+trivy-results.*
+sbom.*

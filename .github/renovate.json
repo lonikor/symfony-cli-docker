@@ -1,0 +1,42 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard"
+  ],
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Group GitHub Actions bumps into one PR",
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions"
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "Symfony CLI version (Dockerfile ARG)",
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
+      "matchStrings": ["ARG SYMFONY_CLI_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "symfony-cli/symfony-cli",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "description": "Composer version (Dockerfile ARG)",
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
+      "matchStrings": ["ARG COMPOSER_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "composer"
+    },
+    {
+      "description": "php-extension-installer version (Dockerfile ARG)",
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
+      "matchStrings": ["ARG PHP_EXT_INSTALLER_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "mlocati/php-extension-installer"
+    }
+  ]
+}

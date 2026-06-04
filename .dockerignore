@@ -1,0 +1,7 @@
+.git
+.gitignore
+.github
+*.md
+Makefile
+LICENSE
+.hadolint.yaml
